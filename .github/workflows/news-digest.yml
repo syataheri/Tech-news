@@ -8,6 +8,7 @@ on:
 jobs:
   send-digest:
     runs-on: ubuntu-latest
+    environment: TELEGRAM_BOT_TOKEN
     steps:
       - name: Check out code
         uses: actions/checkout@v4
@@ -32,4 +33,9 @@ jobs:
           FETCH_LIMIT: ${{ vars.FETCH_LIMIT || '20' }}
           MAX_ITEMS: ${{ vars.MAX_ITEMS || '5' }}
           LOG_LEVEL: info
-        run: npm run dev
+        run: |
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+            echo "Telegram secrets are unavailable. Check the selected GitHub environment and secret names."
+            exit 1
+          fi
+          npm run dev
