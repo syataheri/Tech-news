@@ -2,7 +2,7 @@ name: Tech News Telegram Digest
 
 on:
   schedule:
-    - cron: '0 8,18 * * *'
+    - cron: '30 4,14 * * *'
   workflow_dispatch:
 
 jobs:
