@@ -34,16 +34,61 @@ const KEYWORDS = [
   'open source',
 ];
 
+const DEVELOPER_SIGNALS = [
+  'model',
+  'models',
+  'inference',
+  'training',
+  'embedding',
+  'embeddings',
+  'vector database',
+  'retrieval augmented generation',
+  'rag',
+  'fine-tuning',
+  'fine tuning',
+  'sdk',
+  'api',
+  'framework',
+  'runtime',
+  'container',
+  'kubernetes',
+  'observability',
+  'latency',
+  'scaling',
+  'database',
+  'distributed systems',
+  'open source',
+  'vulnerability',
+  'zero-day',
+];
+
+const EXCLUDED_PATTERNS = [
+  /\b(acqui(?:re|red|res|ring)|acquisition|buying|bought|merger|merges|takeover)\b/i,
+  /\b(raises?|raised|funding|fundraise|series [a-z]|venture capital|valuation|investors?)\b/i,
+  /\b(earnings|revenue|quarterly results|financial results|stock|shares|ipo)\b/i,
+  /\b(ifa|smartphone|phone review|headphones?|speakers?|television|tv review|laptop review|gaming console|wearable|smart home)\b/i,
+  /\b(preorder|buying guide|best .* to buy|hands-on review|review:|reviews)\b/i,
+];
+
+const isExcluded = (title: string) =>
+  EXCLUDED_PATTERNS.some((pattern) => pattern.test(title));
+
+const containsKeyword = (text: string, keyword: string) => {
+  const escapedKeyword = keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`\\b${escapedKeyword}\\b`, 'i').test(text);
+};
+
 const getScore = (title: string, summary: string = '') => {
   const text = `${title} ${summary}`.toLowerCase();
   let score = 0;
 
   for (const word of KEYWORDS) {
-    if (text.includes(word.toLowerCase())) score += 2;
+    if (containsKeyword(text, word)) score += 2;
   }
 
-  if (/\b(ai|llm|ml|machine learning|generative|agent|agents)\b/i.test(text)) score += 5;
-  if (/\b(backend|api|cloud|database|kubernetes|infra|security|platform|distributed systems)\b/i.test(text)) score += 4;
+  if (/\b(ai|llm|ml|machine learning|generative|agent|agents)\b/i.test(text)) score += 4;
+  if (/\b(backend|api|cloud|database|kubernetes|infra|security|platform|distributed systems)\b/i.test(text)) score += 6;
+  if (DEVELOPER_SIGNALS.some((signal) => containsKeyword(text, signal))) score += 5;
   if (/\b(startup|venture|developer tools|open source|performance|software engineering)\b/i.test(text)) score += 2;
 
   if (/\b(launch|release|update|new|announces)\b/i.test(title.toLowerCase())) score += 1;
@@ -54,8 +99,17 @@ const getScore = (title: string, summary: string = '') => {
 const normalizeText = (value?: string) =>
   (value || '').replace(/\s+/g, ' ').trim();
 
+const DEVELOPER_FEEDS = [
+  'https://aws.amazon.com/blogs/architecture/feed/',
+  'https://blog.cloudflare.com/rss/',
+  'https://github.blog/feed/',
+  'https://kubernetes.io/feed.xml',
+  'https://netflixtechblog.com/feed',
+  'https://openai.com/blog/rss.xml',
+];
+
 export async function fetchArticles(): Promise<Article[]> {
-  const feeds = config.newsFeeds.length ? config.newsFeeds : [
+  const generalFeeds = config.newsFeeds.length ? config.newsFeeds : [
     'https://techcrunch.com/feed/',
     'https://www.theverge.com/rss/index.xml',
     'https://www.wired.com/feed/rss',
@@ -67,6 +121,7 @@ export async function fetchArticles(): Promise<Article[]> {
     'https://www.digitaltrends.com/feed/',
     'https://mashable.com/rss',
   ];
+  const feeds = [...new Set([...generalFeeds, ...DEVELOPER_FEEDS])];
 
   const seen = new Set<string>();
   const articles: Article[] = [];
@@ -83,6 +138,7 @@ export async function fetchArticles(): Promise<Article[]> {
         const source = feed.title || 'Unknown source';
 
         if (!title || !link) continue;
+        if (isExcluded(title)) continue;
 
         const uniqueKey = link || title.toLowerCase();
         if (seen.has(uniqueKey)) continue;
@@ -99,7 +155,7 @@ export async function fetchArticles(): Promise<Article[]> {
           pubDate: item.pubDate,
           source,
           score,
-          keywords: KEYWORDS.filter((word) => `${title} ${summary}`.toLowerCase().includes(word.toLowerCase())),
+          keywords: KEYWORDS.filter((word) => containsKeyword(`${title} ${summary}`, word)),
         });
       }
     } catch (error) {
@@ -107,12 +163,34 @@ export async function fetchArticles(): Promise<Article[]> {
     }
   }
 
-  return articles
-    .sort((a, b) => {
+  const rankedArticles = articles.sort((a, b) => {
       if (b.score !== a.score) return b.score - a.score;
       const aTime = a.pubDate ? new Date(a.pubDate).getTime() : 0;
       const bTime = b.pubDate ? new Date(b.pubDate).getTime() : 0;
       return bTime - aTime;
-    })
-    .slice(0, Math.max(1, config.maxItems || 5));
+    });
+
+  const maxItems = Math.max(1, config.maxItems || 5);
+  const maxPerSource = Math.max(1, Math.ceil(maxItems / 3));
+  const selected: Article[] = [];
+  const sourceCounts = new Map<string, number>();
+
+  for (const article of rankedArticles) {
+    if (selected.length >= maxItems) break;
+    if (sourceCounts.has(article.source)) continue;
+
+    selected.push(article);
+    sourceCounts.set(article.source, 1);
+  }
+
+  for (const article of rankedArticles) {
+    if (selected.length >= maxItems) break;
+    const count = sourceCounts.get(article.source) || 0;
+    if (count >= maxPerSource || selected.includes(article)) continue;
+
+    selected.push(article);
+    sourceCounts.set(article.source, count + 1);
+  }
+
+  return selected;
 }
