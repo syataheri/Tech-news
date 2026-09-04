@@ -126,10 +126,23 @@ export async function fetchArticles(): Promise<Article[]> {
   const seen = new Set<string>();
   const articles: Article[] = [];
 
-  for (const feedUrl of feeds) {
+  const feedResults = await Promise.allSettled(feeds.map(async (feedUrl) => {
     try {
-      const feed = await parser.parseURL(feedUrl);
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10000);
+      const response = await fetch(feedUrl, {
+        signal: controller.signal,
+        headers: { 'User-Agent': 'TechNewsTelegramAgent/1.0' },
+      });
+      clearTimeout(timeout);
+
+      if (!response.ok) {
+        throw new Error(`Status code ${response.status}`);
+      }
+
+      const feed = await parser.parseString(await response.text());
       const items = feed.items || [];
+      const feedArticles: Article[] = [];
 
       for (const item of items.slice(0, config.fetchLimit)) {
         const title = normalizeText(item.title);
@@ -140,15 +153,11 @@ export async function fetchArticles(): Promise<Article[]> {
         if (!title || !link) continue;
         if (isExcluded(title)) continue;
 
-        const uniqueKey = link || title.toLowerCase();
-        if (seen.has(uniqueKey)) continue;
-        seen.add(uniqueKey);
-
         const score = getScore(title, summary);
 
         if (score < 4) continue;
 
-        articles.push({
+        feedArticles.push({
           title,
           link,
           summary,
@@ -158,8 +167,21 @@ export async function fetchArticles(): Promise<Article[]> {
           keywords: KEYWORDS.filter((word) => containsKeyword(`${title} ${summary}`, word)),
         });
       }
+
+      return feedArticles;
     } catch (error) {
       console.warn(`Failed to fetch feed ${feedUrl}:`, error instanceof Error ? error.message : error);
+      return [];
+    }
+  }));
+
+  for (const result of feedResults) {
+    if (result.status !== 'fulfilled') continue;
+    for (const article of result.value) {
+      const uniqueKey = article.link || article.title.toLowerCase();
+      if (seen.has(uniqueKey)) continue;
+      seen.add(uniqueKey);
+      articles.push(article);
     }
   }
 
